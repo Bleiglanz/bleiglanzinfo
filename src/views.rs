@@ -135,6 +135,7 @@ const STYLE: &str = "
     .msg-delete button:hover { border-color: var(--danger); background: rgba(179,64,31,0.08); }
     .edit-actions { display: flex; align-items: center; gap: 0.9rem; margin-top: 0.75rem; }
     .edit-actions .btn-cancel { font-size: 0.9rem; color: var(--muted); }
+    .thread-messages { margin-top: 2.75rem; padding-top: 1.75rem; border-top: 1px solid var(--border); }
 
     .error {
         color: var(--danger); background: rgba(179,64,31,0.08); border: 1px solid rgba(179,64,31,0.25);
@@ -318,51 +319,6 @@ pub fn thread_page(
         html! {
             nav { a href="/" { "← Topics" } }
             h1 { (title) }
-            @for (i, m) in messages.iter().enumerate() {
-                // Messages are newest-first, so the latest is index 0.
-                @let is_last_owned = i == 0 && m.author == current_user;
-                @let is_editing = is_last_owned && Some(m.id) == editing;
-                div.msg {
-                    div.msg-meta {
-                        span.msg-author { (m.author) } " · " (fmt_berlin(m.created_at))
-                        @if is_last_owned && !is_editing {
-                            span.msg-actions {
-                                a.msg-btn href={ "/" (slug) "?edit=" (m.id) } { "Edit" }
-                                form.msg-delete method="post" action={ "/" (slug) "/delete" } {
-                                    input type="hidden" name="_csrf" value=(csrf);
-                                    input type="hidden" name="msg_id" value=(m.id);
-                                    button type="submit" { "Delete" }
-                                }
-                            }
-                        }
-                    }
-                    @if is_editing {
-                        form method="post" action={ "/" (slug) "/edit" } {
-                            input type="hidden" name="_csrf" value=(csrf);
-                            input type="hidden" name="msg_id" value=(m.id);
-                            div.editor {
-                                div.editor-pane {
-                                    textarea name="body" rows="6"
-                                        placeholder="Edit your message… TeX math is supported." { (m.body) }
-                                }
-                                div.editor-pane {
-                                    span.field-label { "Preview" }
-                                    div.msg-body.preview {}
-                                }
-                            }
-                            div.edit-actions {
-                                button type="submit" { "Save" }
-                                a.btn-cancel href={ "/" (slug) } { "Cancel" }
-                            }
-                        }
-                    } @else {
-                        div.msg-body { (m.body) }
-                    }
-                }
-            }
-            @if messages.is_empty() {
-                p { "No messages yet. Be the first!" }
-            }
             h2 { "Post a message" }
             @if let Some(err) = error {
                 p.error { (err) }
@@ -385,6 +341,53 @@ pub fn thread_page(
                     " and display " code { "$$ \\sum_{i=1}^n i $$" } "."
                 }
                 div { button type="submit" { "Post" } }
+            }
+            div.thread-messages {
+                @for (i, m) in messages.iter().enumerate() {
+                    // Messages are newest-first, so the latest is index 0.
+                    @let is_last_owned = i == 0 && m.author == current_user;
+                    @let is_editing = is_last_owned && Some(m.id) == editing;
+                    div.msg {
+                        div.msg-meta {
+                            span.msg-author { (m.author) } " · " (fmt_berlin(m.created_at))
+                            @if is_last_owned && !is_editing {
+                                span.msg-actions {
+                                    a.msg-btn href={ "/" (slug) "?edit=" (m.id) } { "Edit" }
+                                    form.msg-delete method="post" action={ "/" (slug) "/delete" } {
+                                        input type="hidden" name="_csrf" value=(csrf);
+                                        input type="hidden" name="msg_id" value=(m.id);
+                                        button type="submit" { "Delete" }
+                                    }
+                                }
+                            }
+                        }
+                        @if is_editing {
+                            form method="post" action={ "/" (slug) "/edit" } {
+                                input type="hidden" name="_csrf" value=(csrf);
+                                input type="hidden" name="msg_id" value=(m.id);
+                                div.editor {
+                                    div.editor-pane {
+                                        textarea name="body" rows="6"
+                                            placeholder="Edit your message… TeX math is supported." { (m.body) }
+                                    }
+                                    div.editor-pane {
+                                        span.field-label { "Preview" }
+                                        div.msg-body.preview {}
+                                    }
+                                }
+                                div.edit-actions {
+                                    button type="submit" { "Save" }
+                                    a.btn-cancel href={ "/" (slug) } { "Cancel" }
+                                }
+                            }
+                        } @else {
+                            div.msg-body { (m.body) }
+                        }
+                    }
+                }
+                @if messages.is_empty() {
+                    p { "No messages yet. Be the first!" }
+                }
             }
         },
     )
