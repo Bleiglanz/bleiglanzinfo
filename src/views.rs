@@ -1,5 +1,5 @@
 use chrono::NaiveDateTime;
-use maud::{html, Markup, DOCTYPE};
+use maud::{html, Markup, PreEscaped, DOCTYPE};
 
 const STYLE: &str = "
     :root {
@@ -127,7 +127,58 @@ const STYLE: &str = "
         background: var(--surface); border: 1px solid var(--border);
         border-radius: var(--radius); padding: 1.75rem; box-shadow: var(--shadow);
     }
+
+    .editor { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: stretch; }
+    .editor-pane { display: flex; flex-direction: column; }
+    .field-label, .editor-pane label { font-size: 0.85rem; font-weight: 600; color: var(--muted); margin-bottom: 0.4rem; }
+    .editor textarea { flex: 1; min-height: 11rem; }
+    .preview {
+        flex: 1; min-height: 11rem; margin: 0; overflow: auto;
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 0.6rem 0.75rem;
+    }
+    .preview:empty::before { content: 'Nothing to preview yet.'; color: var(--muted); }
+    .tex-hint { font-size: 0.8rem; color: var(--muted); margin: 0.6rem 0 1rem; }
+    .tex-hint code { font-family: var(--font-mono); background: var(--accent-soft); padding: 0.05rem 0.35rem; border-radius: 5px; font-size: 0.9em; }
+    @media (max-width: 640px) { .editor { grid-template-columns: 1fr; } }
 ";
+
+const KATEX_VERSION: &str = "0.16.11";
+const KATEX_CSS_SRI: &str =
+    "sha384-nB0miv6/jRmo5UMMR1wu3Gz6NLsoTkbqJghGIsx//Rlm+ZU03BU6SQNC66uf4l5+";
+const KATEX_JS_SRI: &str =
+    "sha384-7zkQWkzuo3B5mTepMUcHkMB5jZaolc2xDwL6VFqjFALcbeS9Ggm/Yr2r3Dy4lfFg";
+const KATEX_AUTORENDER_SRI: &str =
+    "sha384-43gviWU0YVjaDtb/GhzOouOXtZMP/7XUzwPTstBeZFe/+rCMvRwr4yROQP43s0Xk";
+
+const KATEX_INIT: &str = r#"
+(function () {
+    var opts = {
+        delimiters: [
+            { left: '$$', right: '$$', display: true },
+            { left: '$', right: '$', display: false },
+            { left: '\\(', right: '\\)', display: false },
+            { left: '\\[', right: '\\]', display: true }
+        ],
+        throwOnError: false
+    };
+    function render(el) {
+        if (window.renderMathInElement) {
+            try { renderMathInElement(el, opts); } catch (e) {}
+        }
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+        document.querySelectorAll('.msg-body:not(.preview)').forEach(render);
+        var ta = document.getElementById('body');
+        var pv = document.getElementById('preview');
+        if (ta && pv) {
+            var upd = function () { pv.textContent = ta.value; render(pv); };
+            ta.addEventListener('input', upd);
+            upd();
+        }
+    });
+})();
+"#;
 
 fn layout(title: &str, body: Markup) -> Markup {
     html! {
@@ -137,9 +188,24 @@ fn layout(title: &str, body: Markup) -> Markup {
                 meta charset="utf-8";
                 meta name="viewport" content="width=device-width, initial-scale=1";
                 title { (title) }
-                style { (STYLE) }
+                link rel="stylesheet"
+                    href={ "https://cdn.jsdelivr.net/npm/katex@" (KATEX_VERSION) "/dist/katex.min.css" }
+                    integrity=(KATEX_CSS_SRI)
+                    crossorigin="anonymous";
+                style { (PreEscaped(STYLE)) }
             }
-            body { (body) }
+            body {
+                (body)
+                script defer
+                    src={ "https://cdn.jsdelivr.net/npm/katex@" (KATEX_VERSION) "/dist/katex.min.js" }
+                    integrity=(KATEX_JS_SRI)
+                    crossorigin="anonymous" {}
+                script defer
+                    src={ "https://cdn.jsdelivr.net/npm/katex@" (KATEX_VERSION) "/dist/contrib/auto-render.min.js" }
+                    integrity=(KATEX_AUTORENDER_SRI)
+                    crossorigin="anonymous" {}
+                script { (PreEscaped(KATEX_INIT)) }
+            }
         }
     }
 }
@@ -239,7 +305,21 @@ pub fn thread_page(
             }
             form method="post" action={ "/" (slug) } {
                 input type="hidden" name="_csrf" value=(csrf);
-                div { textarea name="body" rows="5" { (prefill) } }
+                div.editor {
+                    div.editor-pane {
+                        label for="body" { "Message" }
+                        textarea #body name="body" rows="10"
+                            placeholder="Write a message… TeX math is supported." { (prefill) }
+                    }
+                    div.editor-pane {
+                        span.field-label { "Preview" }
+                        div #preview.msg-body.preview {}
+                    }
+                }
+                p.tex-hint {
+                    "Supports TeX — inline " code { "$a^2+b^2$" }
+                    " and display " code { "$$ \\sum_{i=1}^n i $$" } "."
+                }
                 div { button type="submit" { "Post" } }
             }
         },
