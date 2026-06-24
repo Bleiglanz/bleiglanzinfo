@@ -1,0 +1,217 @@
+# Technical Spec — Minimal Forum (Rust / Axum)
+
+**Status:** v0 draft — scope locked, details to refine.
+**Audience:** Claude Code (implementation agent).
+**Goal:** Invitation-only plaintext message board. Server-rendered, no client JS required, minimal HTML.
+
+---
+
+## 1. Scope
+
+Two user-facing views plus auth:
+
+1. **Topic list** — all topics, always (no filtering/paging in v1).
+2. **Thread** — all messages of one topic, sorted by date, with a post box.
+
+Access is gated by login. Users are seeded into a SQL table by an admin; **no self-registration** (invitation-only).
+
+---
+
+## 2. Stack
+
+| Concern | Choice | Notes |
+|---|---|---|
+| Language | Rust 2021 | |
+| Runtime | Tokio | |
+| HTTP | **Axum** | |
+| DB | **SQLite via SQLx** | compile-time–checked queries (`query!`), migrations. Postgres swap is a feature/URL change — see §11. |
+| HTML | **Maud** | compile-time templates, auto-escaping (XSS-safe by default) |
+| Password hashing | **argon2** (argon2id) | |
+| Session | **`axum-extra` `PrivateCookieJar`** | encrypted+signed cookie, stateless. Alt: `tower-sessions` if server-side revocation wanted (§11). |
+| Middleware/util | `tower-http` (`TraceLayer`, `RequestBodyLimitLayer`), `tracing-subscriber` | |
+
+> Use current stable crate versions at scaffold time (`cargo add`). Do not pin to guessed versions.
+
+---
+
+## 3. Routes
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/` , `/index.html` | yes | Topic list. Both paths render the same view. |
+| GET | `/{slug}` | yes | Thread: topic title + messages (oldest→newest) + post form. Unknown slug → 404. |
+| POST | `/{slug}` | yes | Create message in topic. On success **303** redirect to `GET /{slug}` (PRG). Empty/oversized body → re-render thread with inline error (400). |
+| GET | `/login` | no | Login form. If already authed → 303 to `/`. |
+| POST | `/login` | no | Verify credentials; on success set session cookie + 303 to `/`; on failure re-render form with generic error. |
+| POST | `/logout` | yes | Clear cookie, 303 to `/login`. |
+
+No static asset routes; minimal CSS is inlined in the layout `<head>`.
+
+---
+
+## 4. Data model
+
+`migrations/0001_init.sql`:
+
+```sql
+CREATE TABLE users (
+    id            INTEGER PRIMARY KEY,
+    username      TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,                       -- argon2id PHC string
+    created_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE topics (
+    id         INTEGER PRIMARY KEY,
+    slug       TEXT NOT NULL UNIQUE,                   -- URL segment, [a-z0-9-]
+    title      TEXT NOT NULL,                          -- display name
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE messages (
+    id         INTEGER PRIMARY KEY,
+    topic_id   INTEGER NOT NULL REFERENCES topics(id) ON DELETE CASCADE,
+    author_id  INTEGER NOT NULL REFERENCES users(id),
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_messages_topic_created ON messages(topic_id, created_at);
+```
+
+- Timestamps stored as UTC ISO-8601 text (`datetime('now')`), mapped to `chrono::NaiveDateTime` (UTC). Display formatted server-side.
+- Enable `PRAGMA foreign_keys = ON` via SQLx `SqliteConnectOptions` (off by default in SQLite).
+- **Topics are seeded by admin in v1** — no creation endpoint (see §11).
+
+---
+
+## 5. Auth & sessions
+
+**Login flow**
+1. `POST /login` with `username`, `password`.
+2. Look up user by username; if absent, run a dummy argon2 verify anyway (constant-time, avoid user enumeration), then fail.
+3. Verify password against stored PHC hash (argon2id).
+4. On success, write session cookie.
+
+**Session cookie** (`PrivateCookieJar`, key from `SESSION_KEY`):
+- Payload: `user_id` and a per-session `csrf` token.
+- Flags: `HttpOnly`, `SameSite=Lax`, `Secure` (configurable for local HTTP dev), reasonable `Max-Age`, `Path=/`.
+
+**Auth extractor** `AuthUser`:
+- `FromRequestParts`: read `user_id` from the private jar, load `{id, username}` from DB (rejects if the row vanished).
+- Rejection → `Redirect::to("/login")` (303). All gated handlers take `AuthUser` as an argument.
+
+**User seeding (no registration):**
+- Provide `src/bin/hash.rs`: reads a password from stdin/arg, prints an argon2id PHC string. Admin inserts rows manually:
+  `INSERT INTO users (username, password_hash) VALUES ('anton', '<hash>');`
+- Optionally `src/bin/seed.rs` to insert an initial user + topics from env/args.
+
+**CSRF (minimal, included):**
+- Hidden `_csrf` field in every POST form, value = session `csrf` from the (encrypted, tamper-proof) cookie.
+- On POST, constant-time compare submitted `_csrf` to cookie value; mismatch → 403.
+- Acceptable for v1 because the cookie is encrypted+signed. Note as revisitable if `tower-sessions` adopted.
+
+---
+
+## 6. Views (Maud)
+
+- `layout(title, body)` — `<!doctype html>`, `<meta charset>`, `<meta viewport>`, one small inline `<style>` (system font, max-width, readable line length). Nothing else.
+- **index** — `<h1>`, `<ul>` of topics, each `<a href="/{slug}">{title}</a>`. Logout button.
+- **thread** — `<h1>{title}</h1>`; for each message a block with `author · timestamp` and escaped `body` (preserve newlines via `white-space: pre-wrap`); then a `<form method="post" action="/{slug}">` with `<textarea name="body">`, hidden `_csrf`, submit. Inline error slot above the form.
+- **login** — `<form method="post" action="/login">` with `username`, `password`, hidden `_csrf` (issued on `GET /login` via a pre-auth cookie), generic error slot.
+
+Maud auto-escapes interpolated values; do not bypass with `PreEscaped` on user input.
+
+---
+
+## 7. Config (env)
+
+| Var | Example | Purpose |
+|---|---|---|
+| `DATABASE_URL` | `sqlite://forum.db` | SQLx connection |
+| `BIND_ADDR` | `127.0.0.1:8080` | listen address |
+| `SESSION_KEY` | 64-byte hex | cookie encryption key (fail fast if missing/short) |
+| `COOKIE_SECURE` | `true` / `false` | allow HTTP in dev |
+| `MAX_BODY_BYTES` | `8192` | per-message cap |
+| `RUST_LOG` | `info,forum=debug` | tracing |
+
+Provide `.env.example`. Load via `dotenvy` in dev.
+
+---
+
+## 8. Project layout
+
+```
+forum/
+├─ Cargo.toml
+├─ .env.example
+├─ migrations/
+│  └─ 0001_init.sql
+└─ src/
+   ├─ main.rs        # config, pool, router, listener
+   ├─ db.rs          # pool init (+ PRAGMA foreign_keys), migrate
+   ├─ auth.rs        # AuthUser extractor, login/logout, csrf, argon2
+   ├─ handlers.rs    # index, thread (GET/POST)
+   ├─ views.rs       # Maud templates
+   ├─ error.rs       # AppError: IntoResponse
+   └─ bin/
+      ├─ hash.rs     # password → argon2 PHC
+      └─ seed.rs     # optional initial user/topics
+```
+
+---
+
+## 9. Behavior & edge cases
+
+- Unknown `slug` → **404** (not auto-create in v1).
+- Empty/whitespace-only body → 400, re-render thread with error, no insert.
+- Body length capped at `MAX_BODY_BYTES`; enforce both in handler and via `RequestBodyLimitLayer`.
+- Messages ordered `created_at ASC, id ASC` (chronological).
+- Errors: `AppError` enum (`NotFound`, `BadRequest(String)`, `Unauthorized`, `Forbidden`, `Internal`) implementing `IntoResponse`; DB/internal errors logged, generic 500 to client.
+- `tracing` request spans; no PII (no passwords, no bodies) in logs.
+
+---
+
+## 10. Non-goals (v1)
+
+No topic-creation UI, no registration, no edit/delete, no pagination, no Markdown/rich text, no avatars, no email, no password reset, no rate limiting (note as future hardening).
+
+---
+
+## 11. Open questions (refine before/while building)
+
+1. **Topic creation** — seeded only (current default), implicit-on-first-post, or an admin-only endpoint?
+2. **Topic identifier** — `slug` (current default) vs numeric `id` in URL?
+3. **Message order** — ASC (current) vs DESC (newest first)?
+4. **Pagination** — needed once a thread grows? threshold?
+5. **DB** — stay on SQLite, or Postgres now (SQLx feature + `DATABASE_URL`)? Air-gapped deploy may favor SQLite (single file, no server).
+6. **Sessions** — stateless `PrivateCookieJar` (current) vs `tower-sessions` for revocation/logout-everywhere?
+7. **Post UX** — keep full-page PRG (current) or add HTMX for in-place append?
+
+---
+
+## 12. Acceptance criteria
+
+- [ ] `cargo run` boots, runs migrations, serves on `BIND_ADDR`.
+- [ ] Unauthenticated request to any gated route → redirect to `/login`.
+- [ ] `hash.rs` produces a hash that `POST /login` accepts; wrong password rejected with generic error and no enumeration.
+- [ ] `/` and `/index.html` list all topics; links resolve to threads.
+- [ ] Thread shows messages oldest→newest with author + timestamp; bodies HTML-escaped.
+- [ ] Posting a message inserts a row and PRG-redirects; reload does not double-post.
+- [ ] Empty body and oversized body are rejected with inline error, no insert.
+- [ ] Unknown topic → 404; missing/invalid CSRF on POST → 403.
+- [ ] `cargo clippy -- -D warnings` and `cargo fmt --check` clean.
+- [ ] All SQL via SQLx parameterized/`query!` (no string interpolation).
+
+---
+
+## 13. Build / run
+
+```sh
+cargo install sqlx-cli --no-default-features --features sqlite   # for migrations (offline mode optional)
+cp .env.example .env && $EDITOR .env                             # set SESSION_KEY etc.
+sqlx database create
+sqlx migrate run
+cargo run --bin hash                                             # seed an admin password hash
+cargo run                                                        # serve
+```
