@@ -77,7 +77,7 @@ async fn render_index(
     let rows = sqlx::query_as::<_, IndexTopicRow>(
         "SELECT t.slug, t.title, COUNT(m.id) AS msg_count, MAX(m.created_at) AS last_at \
          FROM topics t LEFT JOIN messages m ON m.topic_id = t.id \
-         GROUP BY t.id ORDER BY t.created_at ASC, t.id ASC",
+         GROUP BY t.id ORDER BY last_at DESC, t.created_at DESC, t.id DESC",
     )
     .fetch_all(&state.pool)
     .await?;

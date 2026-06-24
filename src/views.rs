@@ -1,5 +1,15 @@
-use chrono::NaiveDateTime;
+use chrono::{NaiveDateTime, TimeZone};
+use chrono_tz::Europe::Berlin;
 use maud::{html, Markup, PreEscaped, DOCTYPE};
+
+/// Format a UTC timestamp for display in the Europe/Berlin timezone
+/// (CET/CEST, DST-aware). Shows the zone abbreviation, e.g. "CEST".
+fn fmt_berlin(utc: NaiveDateTime) -> String {
+    Berlin
+        .from_utc_datetime(&utc)
+        .format("%Y-%m-%d %H:%M %Z")
+        .to_string()
+}
 
 const STYLE: &str = "
     :root {
@@ -246,7 +256,7 @@ pub fn index_page(topics: &[TopicRow], username: &str, csrf: &str, error: Option
                                 td.num { (t.msg_count) }
                                 td {
                                     @if let Some(dt) = t.last_at {
-                                        (dt.format("%Y-%m-%d %H:%M UTC"))
+                                        (fmt_berlin(dt))
                                     } @else {
                                         "—"
                                     }
@@ -292,7 +302,7 @@ pub fn thread_page(
             h1 { (title) }
             @for m in messages {
                 div.msg {
-                    div.msg-meta { span.msg-author { (m.author) } " · " (m.created_at.format("%Y-%m-%d %H:%M UTC")) }
+                    div.msg-meta { span.msg-author { (m.author) } " · " (fmt_berlin(m.created_at)) }
                     div.msg-body { (m.body) }
                 }
             }
