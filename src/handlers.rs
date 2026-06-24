@@ -39,6 +39,7 @@ struct TopicQueryRow {
 
 #[derive(sqlx::FromRow)]
 struct MessageQueryRow {
+    id: i64,
     username: String,
     body: String,
     created_at: String,
@@ -171,7 +172,7 @@ pub async fn post_index(
 
 pub async fn get_thread(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     jar: PrivateCookieJar,
     Path(slug): Path<String>,
 ) -> Result<Response, AppError> {
@@ -183,7 +184,59 @@ pub async fn get_thread(
 
     let messages = fetch_messages(&state, topic.id).await?;
     let csrf = get_session_csrf(&jar).unwrap_or_default();
-    Ok(views::thread_page(&slug, &topic.title, &messages, &csrf, None, "").into_response())
+    Ok(views::thread_page(
+        &slug,
+        &topic.title,
+        &messages,
+        &user.username,
+        &csrf,
+        None,
+        "",
+    )
+    .into_response())
+}
+
+#[derive(Deserialize)]
+pub struct DeleteForm {
+    pub msg_id: i64,
+    pub _csrf: Option<String>,
+}
+
+/// Delete a message, but only if it is the latest in the topic and owned by
+/// the requester. The guard runs in SQL so a concurrent reply between page
+/// load and submit makes the delete a no-op rather than removing a
+/// now-non-last message.
+pub async fn delete_message(
+    State(state): State<AppState>,
+    user: AuthUser,
+    jar: PrivateCookieJar,
+    Path(slug): Path<String>,
+    Form(form): Form<DeleteForm>,
+) -> Result<Response, AppError> {
+    let topic = sqlx::query_as::<_, TopicQueryRow>("SELECT id, title FROM topics WHERE slug = ?")
+        .bind(&slug)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let expected = get_session_csrf(&jar).unwrap_or_default();
+    let submitted = form._csrf.as_deref().unwrap_or("");
+    if !constant_time_eq(&expected, submitted) {
+        return Err(AppError::Forbidden);
+    }
+
+    sqlx::query(
+        "DELETE FROM messages \
+         WHERE id = ?1 AND author_id = ?2 AND topic_id = ?3 \
+         AND id = (SELECT MAX(id) FROM messages WHERE topic_id = ?3)",
+    )
+    .bind(form.msg_id)
+    .bind(user.id)
+    .bind(topic.id)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Redirect::to(&format!("/{slug}")).into_response())
 }
 
 #[derive(Deserialize)]
@@ -218,6 +271,7 @@ pub async fn post_thread(
             &slug,
             topic.id,
             &topic.title,
+            &user.username,
             &jar,
             "Message cannot be empty.",
             &form.body,
@@ -230,6 +284,7 @@ pub async fn post_thread(
             &slug,
             topic.id,
             &topic.title,
+            &user.username,
             &jar,
             "Message is too long.",
             &form.body,
@@ -249,7 +304,7 @@ pub async fn post_thread(
 
 async fn fetch_messages(state: &AppState, topic_id: i64) -> Result<Vec<MessageRow>, AppError> {
     let rows = sqlx::query_as::<_, MessageQueryRow>(
-        "SELECT u.username, m.body, m.created_at \
+        "SELECT m.id, u.username, m.body, m.created_at \
          FROM messages m JOIN users u ON u.id = m.author_id \
          WHERE m.topic_id = ? ORDER BY m.created_at ASC, m.id ASC",
     )
@@ -260,6 +315,7 @@ async fn fetch_messages(state: &AppState, topic_id: i64) -> Result<Vec<MessageRo
     Ok(rows
         .into_iter()
         .map(|r| MessageRow {
+            id: r.id,
             author: r.username,
             body: r.body,
             created_at: parse_dt(&r.created_at),
@@ -267,11 +323,13 @@ async fn fetch_messages(state: &AppState, topic_id: i64) -> Result<Vec<MessageRo
         .collect())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn render_with_error(
     state: &AppState,
     slug: &str,
     topic_id: i64,
     title: &str,
+    current_user: &str,
     jar: &PrivateCookieJar,
     error: &str,
     prefill: &str,
@@ -280,7 +338,15 @@ async fn render_with_error(
     let csrf = get_session_csrf(jar).unwrap_or_default();
     Ok((
         StatusCode::BAD_REQUEST,
-        views::thread_page(slug, title, &messages, &csrf, Some(error), prefill),
+        views::thread_page(
+            slug,
+            title,
+            &messages,
+            current_user,
+            &csrf,
+            Some(error),
+            prefill,
+        ),
     )
         .into_response())
 }

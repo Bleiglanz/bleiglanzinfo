@@ -120,9 +120,15 @@ const STYLE: &str = "
         background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
         border-radius: var(--radius); padding: 0.9rem 1.1rem; margin-bottom: 0.9rem; box-shadow: var(--shadow);
     }
-    .msg-meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.35rem; }
+    .msg-meta { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.8rem; margin-bottom: 0.35rem; }
     .msg-meta strong, .msg-author { color: var(--text); font-weight: 600; }
     .msg-body { white-space: pre-wrap; word-break: break-word; }
+    .msg-delete { margin-left: auto; }
+    .msg-delete button {
+        padding: 0.15rem 0.55rem; font-size: 0.72rem; font-weight: 500;
+        color: var(--danger); background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    }
+    .msg-delete button:hover { border-color: var(--danger); background: rgba(179,64,31,0.08); }
 
     .error {
         color: var(--danger); background: rgba(179,64,31,0.08); border: 1px solid rgba(179,64,31,0.25);
@@ -282,27 +288,40 @@ pub fn index_page(topics: &[TopicRow], username: &str, csrf: &str, error: Option
 }
 
 pub struct MessageRow {
+    pub id: i64,
     pub author: String,
     pub body: String,
     pub created_at: NaiveDateTime,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn thread_page(
     slug: &str,
     title: &str,
     messages: &[MessageRow],
+    current_user: &str,
     csrf: &str,
     error: Option<&str>,
     prefill: &str,
 ) -> Markup {
+    let last_index = messages.len().checked_sub(1);
     layout(
         title,
         html! {
             nav { a href="/" { "← Topics" } }
             h1 { (title) }
-            @for m in messages {
+            @for (i, m) in messages.iter().enumerate() {
                 div.msg {
-                    div.msg-meta { span.msg-author { (m.author) } " · " (fmt_berlin(m.created_at)) }
+                    div.msg-meta {
+                        span.msg-author { (m.author) } " · " (fmt_berlin(m.created_at))
+                        @if Some(i) == last_index && m.author == current_user {
+                            form.msg-delete method="post" action={ "/" (slug) "/delete" } {
+                                input type="hidden" name="_csrf" value=(csrf);
+                                input type="hidden" name="msg_id" value=(m.id);
+                                button type="submit" { "Delete" }
+                            }
+                        }
+                    }
                     div.msg-body { (m.body) }
                 }
             }

@@ -71,6 +71,7 @@ async fn main() {
         .route("/logout", post(auth::handle_post_logout))
         .route("/{slug}", get(handlers::get_thread))
         .route("/{slug}", post(handlers::post_thread))
+        .route("/{slug}/delete", post(handlers::delete_message))
         .layer(RequestBodyLimitLayer::new(max_body_bytes as usize))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
