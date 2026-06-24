@@ -123,12 +123,18 @@ const STYLE: &str = "
     .msg-meta { display: flex; align-items: center; gap: 0.5rem; color: var(--muted); font-size: 0.8rem; margin-bottom: 0.35rem; }
     .msg-meta strong, .msg-author { color: var(--text); font-weight: 600; }
     .msg-body { white-space: pre-wrap; word-break: break-word; }
-    .msg-delete { margin-left: auto; }
-    .msg-delete button {
-        padding: 0.15rem 0.55rem; font-size: 0.72rem; font-weight: 500;
-        color: var(--danger); background: transparent; border: 1px solid var(--border); border-radius: 6px;
+    .msg-actions { margin-left: auto; display: flex; align-items: center; gap: 0.4rem; }
+    .msg-btn, .msg-delete button {
+        padding: 0.15rem 0.55rem; font-size: 0.72rem; font-weight: 500; line-height: 1.6;
+        background: transparent; border: 1px solid var(--border); border-radius: 6px;
+        cursor: pointer; text-decoration: none;
     }
+    .msg-btn { color: var(--accent); }
+    .msg-btn:hover { border-color: var(--accent); background: var(--accent-soft); text-decoration: none; }
+    .msg-delete button { color: var(--danger); }
     .msg-delete button:hover { border-color: var(--danger); background: rgba(179,64,31,0.08); }
+    .edit-actions { display: flex; align-items: center; gap: 0.9rem; margin-top: 0.75rem; }
+    .edit-actions .btn-cancel { font-size: 0.9rem; color: var(--muted); }
 
     .error {
         color: var(--danger); background: rgba(179,64,31,0.08); border: 1px solid rgba(179,64,31,0.25);
@@ -185,13 +191,15 @@ const KATEX_INIT: &str = r#"
     }
     document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('.msg-body:not(.preview)').forEach(render);
-        var ta = document.getElementById('body');
-        var pv = document.getElementById('preview');
-        if (ta && pv) {
-            var upd = function () { pv.textContent = ta.value; render(pv); };
-            ta.addEventListener('input', upd);
-            upd();
-        }
+        document.querySelectorAll('.editor').forEach(function (ed) {
+            var ta = ed.querySelector('textarea');
+            var pv = ed.querySelector('.preview');
+            if (ta && pv) {
+                var upd = function () { pv.textContent = ta.value; render(pv); };
+                ta.addEventListener('input', upd);
+                upd();
+            }
+        });
     });
 })();
 "#;
@@ -303,6 +311,7 @@ pub fn thread_page(
     csrf: &str,
     error: Option<&str>,
     prefill: &str,
+    editing: Option<i64>,
 ) -> Markup {
     let last_index = messages.len().checked_sub(1);
     layout(
@@ -311,18 +320,44 @@ pub fn thread_page(
             nav { a href="/" { "← Topics" } }
             h1 { (title) }
             @for (i, m) in messages.iter().enumerate() {
+                @let is_last_owned = Some(i) == last_index && m.author == current_user;
+                @let is_editing = is_last_owned && Some(m.id) == editing;
                 div.msg {
                     div.msg-meta {
                         span.msg-author { (m.author) } " · " (fmt_berlin(m.created_at))
-                        @if Some(i) == last_index && m.author == current_user {
-                            form.msg-delete method="post" action={ "/" (slug) "/delete" } {
-                                input type="hidden" name="_csrf" value=(csrf);
-                                input type="hidden" name="msg_id" value=(m.id);
-                                button type="submit" { "Delete" }
+                        @if is_last_owned && !is_editing {
+                            span.msg-actions {
+                                a.msg-btn href={ "/" (slug) "?edit=" (m.id) } { "Edit" }
+                                form.msg-delete method="post" action={ "/" (slug) "/delete" } {
+                                    input type="hidden" name="_csrf" value=(csrf);
+                                    input type="hidden" name="msg_id" value=(m.id);
+                                    button type="submit" { "Delete" }
+                                }
                             }
                         }
                     }
-                    div.msg-body { (m.body) }
+                    @if is_editing {
+                        form method="post" action={ "/" (slug) "/edit" } {
+                            input type="hidden" name="_csrf" value=(csrf);
+                            input type="hidden" name="msg_id" value=(m.id);
+                            div.editor {
+                                div.editor-pane {
+                                    textarea name="body" rows="6"
+                                        placeholder="Edit your message… TeX math is supported." { (m.body) }
+                                }
+                                div.editor-pane {
+                                    span.field-label { "Preview" }
+                                    div.msg-body.preview {}
+                                }
+                            }
+                            div.edit-actions {
+                                button type="submit" { "Save" }
+                                a.btn-cancel href={ "/" (slug) } { "Cancel" }
+                            }
+                        }
+                    } @else {
+                        div.msg-body { (m.body) }
+                    }
                 }
             }
             @if messages.is_empty() {

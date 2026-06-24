@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
     Form,
@@ -170,11 +170,17 @@ pub async fn post_index(
     Ok(Redirect::to(&format!("/{slug}")).into_response())
 }
 
+#[derive(Deserialize)]
+pub struct ThreadQuery {
+    pub edit: Option<i64>,
+}
+
 pub async fn get_thread(
     State(state): State<AppState>,
     user: AuthUser,
     jar: PrivateCookieJar,
     Path(slug): Path<String>,
+    Query(q): Query<ThreadQuery>,
 ) -> Result<Response, AppError> {
     let topic = sqlx::query_as::<_, TopicQueryRow>("SELECT id, title FROM topics WHERE slug = ?")
         .bind(&slug)
@@ -192,8 +198,83 @@ pub async fn get_thread(
         &csrf,
         None,
         "",
+        q.edit,
     )
     .into_response())
+}
+
+#[derive(Deserialize)]
+pub struct EditForm {
+    pub msg_id: i64,
+    pub body: String,
+    pub _csrf: Option<String>,
+}
+
+/// Edit a message, subject to the same guard as deletion: only the latest
+/// message in the topic, only its author. The guard runs in SQL, so a reply
+/// arriving between page load and submit makes the edit a safe no-op.
+pub async fn edit_message(
+    State(state): State<AppState>,
+    user: AuthUser,
+    jar: PrivateCookieJar,
+    Path(slug): Path<String>,
+    Form(form): Form<EditForm>,
+) -> Result<Response, AppError> {
+    let topic = sqlx::query_as::<_, TopicQueryRow>("SELECT id, title FROM topics WHERE slug = ?")
+        .bind(&slug)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let expected = get_session_csrf(&jar).unwrap_or_default();
+    let submitted = form._csrf.as_deref().unwrap_or("");
+    if !constant_time_eq(&expected, submitted) {
+        return Err(AppError::Forbidden);
+    }
+
+    let body = form.body.trim().to_string();
+    if body.is_empty() {
+        return render_with_error(
+            &state,
+            &slug,
+            topic.id,
+            &topic.title,
+            &user.username,
+            &jar,
+            "Message cannot be empty.",
+            "",
+            Some(form.msg_id),
+        )
+        .await;
+    }
+    if body.len() > state.max_body_bytes as usize {
+        return render_with_error(
+            &state,
+            &slug,
+            topic.id,
+            &topic.title,
+            &user.username,
+            &jar,
+            "Message is too long.",
+            "",
+            Some(form.msg_id),
+        )
+        .await;
+    }
+
+    sqlx::query(
+        "UPDATE messages SET body = ?4 \
+         WHERE id = ?1 AND author_id = ?2 AND topic_id = ?3 \
+         AND id = (SELECT MAX(id) FROM messages WHERE topic_id = ?3)",
+    )
+    .bind(form.msg_id)
+    .bind(user.id)
+    .bind(topic.id)
+    .bind(&body)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Redirect::to(&format!("/{slug}")).into_response())
 }
 
 #[derive(Deserialize)]
@@ -275,6 +356,7 @@ pub async fn post_thread(
             &jar,
             "Message cannot be empty.",
             &form.body,
+            None,
         )
         .await;
     }
@@ -288,6 +370,7 @@ pub async fn post_thread(
             &jar,
             "Message is too long.",
             &form.body,
+            None,
         )
         .await;
     }
@@ -333,6 +416,7 @@ async fn render_with_error(
     jar: &PrivateCookieJar,
     error: &str,
     prefill: &str,
+    editing: Option<i64>,
 ) -> Result<Response, AppError> {
     let messages = fetch_messages(state, topic_id).await?;
     let csrf = get_session_csrf(jar).unwrap_or_default();
@@ -346,6 +430,7 @@ async fn render_with_error(
             &csrf,
             Some(error),
             prefill,
+            editing,
         ),
     )
         .into_response())
