@@ -389,7 +389,7 @@ async fn fetch_messages(state: &AppState, topic_id: i64) -> Result<Vec<MessageRo
     let rows = sqlx::query_as::<_, MessageQueryRow>(
         "SELECT m.id, u.username, m.body, m.created_at \
          FROM messages m JOIN users u ON u.id = m.author_id \
-         WHERE m.topic_id = ? ORDER BY m.created_at ASC, m.id ASC",
+         WHERE m.topic_id = ? ORDER BY m.created_at DESC, m.id DESC",
     )
     .bind(topic_id)
     .fetch_all(&state.pool)

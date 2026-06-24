@@ -313,14 +313,14 @@ pub fn thread_page(
     prefill: &str,
     editing: Option<i64>,
 ) -> Markup {
-    let last_index = messages.len().checked_sub(1);
     layout(
         title,
         html! {
             nav { a href="/" { "← Topics" } }
             h1 { (title) }
             @for (i, m) in messages.iter().enumerate() {
-                @let is_last_owned = Some(i) == last_index && m.author == current_user;
+                // Messages are newest-first, so the latest is index 0.
+                @let is_last_owned = i == 0 && m.author == current_user;
                 @let is_editing = is_last_owned && Some(m.id) == editing;
                 div.msg {
                     div.msg-meta {
