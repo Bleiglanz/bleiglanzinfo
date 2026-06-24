@@ -2,21 +2,131 @@ use chrono::NaiveDateTime;
 use maud::{html, Markup, DOCTYPE};
 
 const STYLE: &str = "
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; line-height: 1.6; }
-    a { color: #0066cc; }
-    .msg { border-top: 1px solid #ddd; padding: 0.75rem 0; }
-    .msg-meta { color: #666; font-size: 0.85em; margin-bottom: 0.25rem; }
-    .msg-body { white-space: pre-wrap; word-break: break-word; }
-    .error { color: #c00; margin-bottom: 0.5rem; }
-    textarea { width: 100%; box-sizing: border-box; }
-    input, textarea, button { font-size: 1rem; }
-    nav { margin-bottom: 1.5rem; }
+    :root {
+        --font-serif: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif;
+        --font-sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+        --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+        --bg: #f6f3ec;
+        --surface: #fffdf8;
+        --text: #211f1a;
+        --muted: #6c685e;
+        --border: #e6e0d3;
+        --accent: #1f6f63;
+        --accent-strong: #155a50;
+        --accent-soft: rgba(31,111,99,0.10);
+        --danger: #b3401f;
+        --shadow: 0 1px 2px rgba(33,31,26,0.04), 0 6px 20px rgba(33,31,26,0.05);
+        --radius: 10px;
+    }
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --bg: #15140f;
+            --surface: #1d1b15;
+            --text: #ece7da;
+            --muted: #a39d8d;
+            --border: #322e25;
+            --accent: #62b6a6;
+            --accent-strong: #7cc6b8;
+            --accent-soft: rgba(98,182,166,0.12);
+            --danger: #e07a59;
+            --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.28);
+        }
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+        font-family: var(--font-sans);
+        max-width: 46rem;
+        margin: 0 auto;
+        padding: 3rem 1.25rem 5rem;
+        line-height: 1.65;
+        color: var(--text);
+        background: var(--bg);
+        background-image: radial-gradient(120% 90% at 50% -10%, var(--accent-soft), transparent 60%);
+        background-attachment: fixed;
+        -webkit-font-smoothing: antialiased;
+        font-feature-settings: 'kern', 'liga';
+        animation: rise 0.5s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+    }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    @media (prefers-reduced-motion: reduce) { body { animation: none; } }
+    h1, h2, h3 { font-family: var(--font-serif); font-weight: 600; line-height: 1.2; letter-spacing: -0.01em; }
+    h1 { font-size: 1.95rem; margin: 0 0 1.5rem; }
+    h2 { font-size: 1.25rem; margin: 0 0 0.75rem; }
+    a { color: var(--accent); text-decoration: none; transition: color 0.15s; }
+    a:hover { color: var(--accent-strong); text-decoration: underline; text-underline-offset: 3px; }
+    p { margin: 0 0 1rem; }
+
+    nav {
+        display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+        margin-bottom: 2.25rem; padding-bottom: 1rem;
+        border-bottom: 1px solid var(--border);
+        font-size: 0.9rem; color: var(--muted);
+    }
+    nav a { font-weight: 500; }
+
+    input, textarea, button { font-size: 1rem; font-family: inherit; }
+    input[type=text], input[type=password], textarea {
+        width: 100%; padding: 0.6rem 0.75rem; color: var(--text);
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); transition: border-color 0.15s, box-shadow 0.15s;
+    }
+    input:focus, textarea:focus {
+        outline: none; border-color: var(--accent);
+        box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    textarea { resize: vertical; min-height: 6.5rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; color: var(--muted); margin-bottom: 1rem; }
+    label input { margin-top: 0.35rem; }
+
+    button {
+        cursor: pointer; padding: 0.55rem 1.15rem; font-weight: 600;
+        color: #fff; background: var(--accent); border: 1px solid transparent;
+        border-radius: var(--radius); transition: background 0.15s, transform 0.05s, box-shadow 0.15s;
+    }
+    button:hover { background: var(--accent-strong); }
+    button:active { transform: translateY(1px); }
+    button:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-soft); }
+    nav button {
+        color: var(--muted); background: transparent; border-color: var(--border);
+        padding: 0.35rem 0.8rem; font-weight: 500; font-size: 0.85rem;
+    }
+    nav button:hover { color: var(--text); background: var(--surface); border-color: var(--muted); }
+
     table { border-collapse: collapse; width: 100%; }
-    th, td { text-align: left; padding: 0.5rem 0.75rem 0.5rem 0; border-bottom: 1px solid #ddd; }
-    th { color: #666; font-weight: 600; font-size: 0.85em; }
-    td.num { text-align: right; }
-    .new-topic { margin-top: 2rem; }
-    .new-topic input[name=title] { width: 100%; box-sizing: border-box; margin-bottom: 0.5rem; }
+    thead th {
+        text-align: left; padding: 0 0.75rem 0.6rem; color: var(--muted);
+        font-weight: 600; font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase;
+        border-bottom: 1px solid var(--border);
+    }
+    tbody td { padding: 0.85rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: baseline; }
+    tbody tr { transition: background 0.12s; }
+    tbody tr:hover { background: var(--accent-soft); }
+    tbody td:first-child a { font-family: var(--font-serif); font-size: 1.08rem; font-weight: 600; }
+    td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+    tbody td:last-child { color: var(--muted); font-size: 0.85rem; white-space: nowrap; }
+
+    .msg {
+        background: var(--surface); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+        border-radius: var(--radius); padding: 0.9rem 1.1rem; margin-bottom: 0.9rem; box-shadow: var(--shadow);
+    }
+    .msg-meta { color: var(--muted); font-size: 0.8rem; margin-bottom: 0.35rem; }
+    .msg-meta strong, .msg-author { color: var(--text); font-weight: 600; }
+    .msg-body { white-space: pre-wrap; word-break: break-word; }
+
+    .error {
+        color: var(--danger); background: rgba(179,64,31,0.08); border: 1px solid rgba(179,64,31,0.25);
+        border-radius: var(--radius); padding: 0.6rem 0.85rem; margin-bottom: 1rem; font-size: 0.9rem;
+    }
+
+    .new-topic { margin-top: 2.75rem; padding-top: 1.75rem; border-top: 1px solid var(--border); }
+    .new-topic input[name=title] { margin-bottom: 0.75rem; }
+    form > div + div { margin-top: 1rem; }
+
+    .card {
+        background: var(--surface); border: 1px solid var(--border);
+        border-radius: var(--radius); padding: 1.75rem; box-shadow: var(--shadow);
+    }
 ";
 
 fn layout(title: &str, body: Markup) -> Markup {
@@ -46,7 +156,7 @@ pub fn index_page(topics: &[TopicRow], username: &str, csrf: &str, error: Option
         "Topics",
         html! {
             nav {
-                span { "Logged in as " strong { (username) } " · " }
+                span { "Logged in as " strong { (username) } }
                 form method="post" action="/logout" style="display:inline" {
                     button type="submit" { "Log out" }
                 }
@@ -116,7 +226,7 @@ pub fn thread_page(
             h1 { (title) }
             @for m in messages {
                 div.msg {
-                    div.msg-meta { (m.author) " · " (m.created_at.format("%Y-%m-%d %H:%M UTC")) }
+                    div.msg-meta { span.msg-author { (m.author) } " · " (m.created_at.format("%Y-%m-%d %H:%M UTC")) }
                     div.msg-body { (m.body) }
                 }
             }
@@ -141,22 +251,24 @@ pub fn login_page(username_prefill: &str, csrf: &str, error: Option<&str>) -> Ma
         "Log in",
         html! {
             h1 { "Log in" }
-            @if let Some(err) = error {
-                p.error { (err) }
-            }
-            form method="post" action="/login" {
-                input type="hidden" name="_csrf" value=(csrf);
-                div {
-                    label { "Username" br;
-                        input type="text" name="username" value=(username_prefill) autocomplete="username" required;
-                    }
+            div.card {
+                @if let Some(err) = error {
+                    p.error { (err) }
                 }
-                div {
-                    label { "Password" br;
-                        input type="password" name="password" autocomplete="current-password" required;
+                form method="post" action="/login" {
+                    input type="hidden" name="_csrf" value=(csrf);
+                    div {
+                        label { "Username"
+                            input type="text" name="username" value=(username_prefill) autocomplete="username" required;
+                        }
                     }
+                    div {
+                        label { "Password"
+                            input type="password" name="password" autocomplete="current-password" required;
+                        }
+                    }
+                    div { button type="submit" { "Log in" } }
                 }
-                div { button type="submit" { "Log in" } }
             }
         },
     )
