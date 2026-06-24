@@ -11,6 +11,12 @@ const STYLE: &str = "
     textarea { width: 100%; box-sizing: border-box; }
     input, textarea, button { font-size: 1rem; }
     nav { margin-bottom: 1.5rem; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { text-align: left; padding: 0.5rem 0.75rem 0.5rem 0; border-bottom: 1px solid #ddd; }
+    th { color: #666; font-weight: 600; font-size: 0.85em; }
+    td.num { text-align: right; }
+    .new-topic { margin-top: 2rem; }
+    .new-topic input[name=title] { width: 100%; box-sizing: border-box; margin-bottom: 0.5rem; }
 ";
 
 fn layout(title: &str, body: Markup) -> Markup {
@@ -31,9 +37,11 @@ fn layout(title: &str, body: Markup) -> Markup {
 pub struct TopicRow {
     pub slug: String,
     pub title: String,
+    pub msg_count: i64,
+    pub last_at: Option<NaiveDateTime>,
 }
 
-pub fn index_page(topics: &[TopicRow], username: &str) -> Markup {
+pub fn index_page(topics: &[TopicRow], username: &str, csrf: &str, error: Option<&str>) -> Markup {
     layout(
         "Topics",
         html! {
@@ -47,10 +55,40 @@ pub fn index_page(topics: &[TopicRow], username: &str) -> Markup {
             @if topics.is_empty() {
                 p { "No topics yet." }
             } @else {
-                ul {
-                    @for t in topics {
-                        li { a href={ "/" (t.slug) } { (t.title) } }
+                table {
+                    thead {
+                        tr {
+                            th { "Topic" }
+                            th.num { "Messages" }
+                            th { "Last message" }
+                        }
                     }
+                    tbody {
+                        @for t in topics {
+                            tr {
+                                td { a href={ "/" (t.slug) } { (t.title) } }
+                                td.num { (t.msg_count) }
+                                td {
+                                    @if let Some(dt) = t.last_at {
+                                        (dt.format("%Y-%m-%d %H:%M UTC"))
+                                    } @else {
+                                        "—"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            div.new-topic {
+                h2 { "New topic" }
+                @if let Some(err) = error {
+                    p.error { (err) }
+                }
+                form method="post" action="/" {
+                    input type="hidden" name="_csrf" value=(csrf);
+                    input type="text" name="title" placeholder="Topic title" required;
+                    div { button type="submit" { "Create topic" } }
                 }
             }
         },

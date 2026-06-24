@@ -34,7 +34,6 @@ fn parse_dt(s: &str) -> NaiveDateTime {
 #[derive(sqlx::FromRow)]
 struct TopicQueryRow {
     id: i64,
-    slug: String,
     title: String,
 }
 
@@ -45,12 +44,40 @@ struct MessageQueryRow {
     created_at: String,
 }
 
-pub async fn get_index(
-    State(state): State<AppState>,
-    user: AuthUser,
-) -> Result<impl IntoResponse, AppError> {
-    let rows = sqlx::query_as::<_, TopicQueryRow>(
-        "SELECT id, slug, title FROM topics ORDER BY created_at ASC, id ASC",
+#[derive(sqlx::FromRow)]
+struct IndexTopicRow {
+    slug: String,
+    title: String,
+    msg_count: i64,
+    last_at: Option<String>,
+}
+
+fn slugify(title: &str) -> String {
+    let mut slug = String::new();
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() {
+            slug.push(c.to_ascii_lowercase());
+        } else if !slug.ends_with('-') && !slug.is_empty() {
+            slug.push('-');
+        }
+    }
+    while slug.ends_with('-') {
+        slug.pop();
+    }
+    slug
+}
+
+async fn render_index(
+    state: &AppState,
+    jar: &PrivateCookieJar,
+    username: &str,
+    error: Option<&str>,
+    status: StatusCode,
+) -> Result<Response, AppError> {
+    let rows = sqlx::query_as::<_, IndexTopicRow>(
+        "SELECT t.slug, t.title, COUNT(m.id) AS msg_count, MAX(m.created_at) AS last_at \
+         FROM topics t LEFT JOIN messages m ON m.topic_id = t.id \
+         GROUP BY t.id ORDER BY t.created_at ASC, t.id ASC",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -60,9 +87,86 @@ pub async fn get_index(
         .map(|r| TopicRow {
             slug: r.slug,
             title: r.title,
+            msg_count: r.msg_count,
+            last_at: r.last_at.as_deref().map(parse_dt),
         })
         .collect();
-    Ok(views::index_page(&topics, &user.username))
+    let csrf = get_session_csrf(jar).unwrap_or_default();
+    Ok((status, views::index_page(&topics, username, &csrf, error)).into_response())
+}
+
+pub async fn get_index(
+    State(state): State<AppState>,
+    user: AuthUser,
+    jar: PrivateCookieJar,
+) -> Result<Response, AppError> {
+    render_index(&state, &jar, &user.username, None, StatusCode::OK).await
+}
+
+#[derive(Deserialize)]
+pub struct NewTopicForm {
+    pub title: String,
+    pub _csrf: Option<String>,
+}
+
+pub async fn post_index(
+    State(state): State<AppState>,
+    user: AuthUser,
+    jar: PrivateCookieJar,
+    Form(form): Form<NewTopicForm>,
+) -> Result<Response, AppError> {
+    let expected = get_session_csrf(&jar).unwrap_or_default();
+    let submitted = form._csrf.as_deref().unwrap_or("");
+    if !constant_time_eq(&expected, submitted) {
+        return Err(AppError::Forbidden);
+    }
+
+    let title = form.title.trim();
+    if title.is_empty() {
+        return render_index(
+            &state,
+            &jar,
+            &user.username,
+            Some("Topic title cannot be empty."),
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
+    }
+
+    let base = slugify(title);
+    if base.is_empty() {
+        return render_index(
+            &state,
+            &jar,
+            &user.username,
+            Some("Topic title must contain letters or numbers."),
+            StatusCode::BAD_REQUEST,
+        )
+        .await;
+    }
+
+    // Derive a unique slug, appending -2, -3, … on collision.
+    let mut slug = base.clone();
+    let mut n = 2;
+    loop {
+        let exists = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM topics WHERE slug = ?")
+            .bind(&slug)
+            .fetch_one(&state.pool)
+            .await?;
+        if exists == 0 {
+            break;
+        }
+        slug = format!("{base}-{n}");
+        n += 1;
+    }
+
+    sqlx::query("INSERT INTO topics (slug, title) VALUES (?, ?)")
+        .bind(&slug)
+        .bind(title)
+        .execute(&state.pool)
+        .await?;
+
+    Ok(Redirect::to(&format!("/{slug}")).into_response())
 }
 
 pub async fn get_thread(
@@ -71,12 +175,11 @@ pub async fn get_thread(
     jar: PrivateCookieJar,
     Path(slug): Path<String>,
 ) -> Result<Response, AppError> {
-    let topic =
-        sqlx::query_as::<_, TopicQueryRow>("SELECT id, slug, title FROM topics WHERE slug = ?")
-            .bind(&slug)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::NotFound)?;
+    let topic = sqlx::query_as::<_, TopicQueryRow>("SELECT id, title FROM topics WHERE slug = ?")
+        .bind(&slug)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     let messages = fetch_messages(&state, topic.id).await?;
     let csrf = get_session_csrf(&jar).unwrap_or_default();
@@ -96,12 +199,11 @@ pub async fn post_thread(
     Path(slug): Path<String>,
     Form(form): Form<PostForm>,
 ) -> Result<Response, AppError> {
-    let topic =
-        sqlx::query_as::<_, TopicQueryRow>("SELECT id, slug, title FROM topics WHERE slug = ?")
-            .bind(&slug)
-            .fetch_optional(&state.pool)
-            .await?
-            .ok_or(AppError::NotFound)?;
+    let topic = sqlx::query_as::<_, TopicQueryRow>("SELECT id, title FROM topics WHERE slug = ?")
+        .bind(&slug)
+        .fetch_optional(&state.pool)
+        .await?
+        .ok_or(AppError::NotFound)?;
 
     let expected = get_session_csrf(&jar).unwrap_or_default();
     let submitted = form._csrf.as_deref().unwrap_or("");
@@ -184,11 +286,18 @@ async fn render_with_error(
 }
 
 pub async fn get_login(State(state): State<AppState>, jar: PrivateCookieJar) -> Response {
-    // If already authenticated, redirect to /
     if let Some(cookie) = jar.get("session") {
-        if let Some((uid, _)) = parse_session_cookie(cookie.value()) {
+        if let Some((uid, csrf)) = parse_session_cookie(cookie.value()) {
+            // Already authenticated -> go home.
             if uid > 0 {
                 return Redirect::to("/").into_response();
+            }
+            // A pre-auth cookie already exists: reuse its CSRF token instead of
+            // minting a new one. Otherwise every extra GET /login (favicon
+            // redirect, refresh, prefetch) would rotate the cookie and
+            // invalidate the token embedded in an already-rendered form.
+            if !csrf.is_empty() {
+                return views::login_page("", &csrf, None).into_response();
             }
         }
     }

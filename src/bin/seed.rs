@@ -39,24 +39,42 @@ async fn main() {
         .expect("hash failed")
         .to_string();
 
-    sqlx::query("INSERT OR IGNORE INTO users (username, password_hash) VALUES (?, ?)")
+    let existed: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?")
         .bind(&username)
-        .bind(&hash)
-        .execute(&pool)
+        .fetch_optional(&pool)
         .await
-        .expect("insert user failed");
-    println!("User '{username}' seeded.");
+        .expect("user lookup failed");
+
+    sqlx::query(
+        "INSERT INTO users (username, password_hash) VALUES (?, ?) \
+         ON CONFLICT(username) DO UPDATE SET password_hash = excluded.password_hash",
+    )
+    .bind(&username)
+    .bind(&hash)
+    .execute(&pool)
+    .await
+    .expect("upsert user failed");
+
+    if existed.is_some() {
+        println!("User '{username}' already existed — password updated.");
+    } else {
+        println!("User '{username}' created.");
+    }
 
     for entry in topics_env.split(',').filter(|s| !s.is_empty()) {
         let (slug, title) = entry
             .split_once(':')
             .expect("TOPICS format: slug:Title,...");
-        sqlx::query("INSERT OR IGNORE INTO topics (slug, title) VALUES (?, ?)")
+        let result = sqlx::query("INSERT OR IGNORE INTO topics (slug, title) VALUES (?, ?)")
             .bind(slug)
             .bind(title)
             .execute(&pool)
             .await
             .expect("insert topic failed");
-        println!("Topic '{slug}' seeded.");
+        if result.rows_affected() == 0 {
+            println!("Topic '{slug}' already exists — left unchanged.");
+        } else {
+            println!("Topic '{slug}' created.");
+        }
     }
 }

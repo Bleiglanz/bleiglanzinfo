@@ -64,7 +64,7 @@ async fn main() {
     };
 
     let app = Router::new()
-        .route("/", get(handlers::get_index))
+        .route("/", get(handlers::get_index).post(handlers::post_index))
         .route("/index.html", get(handlers::get_index))
         .route("/login", get(handlers::get_login))
         .route("/login", post(auth::handle_post_login))
